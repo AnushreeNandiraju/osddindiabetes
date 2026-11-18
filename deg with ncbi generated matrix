@@ -1,0 +1,197 @@
+
+if (!requireNamespace("BiocManager", quietly = TRUE)) {
+  install.packages("BiocManager")
+}
+
+if (!requireNamespace("DESeq2", quietly = TRUE)) {
+  BiocManager::install("DESeq2", ask = FALSE, update = FALSE)
+}
+
+library(DESeq2)
+
+file_path <- paste0(
+  "C:/Users/famna/AppData/Local/Temp/",
+  "bf9d3c24-0cde-4d2b-a365-4f9f3af05c62_",
+  "GSE185011_raw_counts_GRCh38.p13_NCBI (1).tsv.gz.c62/",
+  "GSE185011_raw_counts_GRCh38.p13_NCBI (1).tsv"
+)
+
+
+dat <- read.delim(
+  file_path,
+  header = TRUE,
+  check.names = FALSE,
+  stringsAsFactors = FALSE
+)
+
+
+dim(dat)
+head(dat[, seq_len(min(6, ncol(dat)))])
+colnames(dat)
+
+
+sample_info <- data.frame(
+  sample_id = paste0("GSM", 5603427:5603451),
+  condition = rep(c("HC", "T2DM", "DR", "DPN", "DN"), each = 5),
+  stringsAsFactors = FALSE
+)
+
+
+column_ids <- vapply(
+  colnames(dat),
+  function(x) {
+    hit <- regmatches(x, regexpr("GSM[0-9]+", x))
+    if (length(hit) == 0L) NA_character_ else hit
+  },
+  character(1)
+)
+
+sample_columns <- which(column_ids %in% sample_info$sample_id)
+
+if (length(sample_columns) == 0L) {
+  stop(
+    "No matching GSM sample columns found. ",
+    "Paste the output of colnames(dat) so the sample names can be matched."
+  )
+}
+
+
+if (1L %in% sample_columns) {
+  stop("First column appears to be a sample, not gene IDs. Inspect head(dat).")
+}
+
+gene_ids <- as.character(dat[[1]])
+
+if (anyNA(gene_ids) || any(!nzchar(gene_ids)) ||
+    anyDuplicated(gene_ids)) {
+  stop("Gene IDs are missing or duplicated. Inspect the first column.")
+}
+
+count_mat <- as.matrix(dat[, sample_columns, drop = FALSE])
+
+if (!is.numeric(count_mat)) {
+  stop("Some count columns are not numeric. Inspect the input file.")
+}
+
+if (anyNA(count_mat) || any(!is.finite(count_mat)) ||
+    any(count_mat < 0) ||
+    any(count_mat != floor(count_mat))) {
+  stop("DESeq2 requires non-negative integer raw counts.")
+}
+
+rownames(count_mat) <- gene_ids
+colnames(count_mat) <- column_ids[sample_columns]
+
+if (anyDuplicated(colnames(count_mat))) {
+  stop("Multiple columns map to the same GSM sample ID.")
+}
+
+metadata <- sample_info[
+  match(colnames(count_mat), sample_info$sample_id),
+  ,
+  drop = FALSE
+]
+
+rownames(metadata) <- metadata$sample_id
+
+column_ids <- vapply(
+  colnames(dat),
+  function(x) {
+    hit <- regmatches(x, regexpr("GSM[0-9]+", x))
+    if (length(hit) == 0L) NA_character_ else hit
+  },
+  FUN.VALUE = character(1),
+  USE.NAMES = FALSE
+)
+
+stopifnot(identical(colnames(count_mat), rownames(metadata)))
+
+
+print(metadata)
+print(table(metadata$condition))
+
+reference_group <- "HC"
+test_group <- "DPN"
+
+selected <- metadata$condition %in% c(reference_group, test_group)
+
+meta_sub <- metadata[selected, , drop = FALSE]
+counts_sub <- count_mat[, selected, drop = FALSE]
+
+if (!all(c(reference_group, test_group) %in% meta_sub$condition)) {
+  stop("One or both requested groups are missing.")
+}
+
+meta_sub$condition <- factor(
+  meta_sub$condition,
+  levels = c(reference_group, test_group)
+)
+
+if (any(table(meta_sub$condition) < 2)) {
+  stop("Each group needs biological replication for this analysis.")
+}
+
+dds <- DESeqDataSetFromMatrix(
+  countData = counts_sub,
+  colData = meta_sub,
+  design = ~ condition
+)
+
+
+minimum_samples <- min(table(meta_sub$condition))
+keep <- rowSums(counts(dds) >= 10) >= minimum_samples
+dds <- dds[keep, ]
+
+
+dds <- DESeq(dds)
+
+
+res <- results(
+  dds,
+  contrast = c("condition", test_group, reference_group),
+  alpha = 0.05
+)
+
+
+results_df <- as.data.frame(res)
+results_df$gene_id <- rownames(results_df)
+
+results_df <- results_df[
+  order(results_df$padj, na.last = TRUE),
+  c("gene_id", "baseMean", "log2FoldChange",
+    "lfcSE", "stat", "pvalue", "padj")
+]
+
+
+is_deg <- with(
+  results_df,
+  !is.na(padj) & padj < 0.05 &
+    !is.na(log2FoldChange) & abs(log2FoldChange) >= 1
+)
+
+deg <- results_df[is_deg, , drop = FALSE]
+deg$direction <- ifelse(deg$log2FoldChange > 0, "Up", "Down")
+
+
+output_dir <- file.path(path.expand("~"), "DESeq2_results")
+dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+
+comparison <- paste0(test_group, "_vs_", reference_group)
+
+write.csv(
+  results_df,
+  file.path(output_dir, paste0(comparison, "_all_results.csv")),
+  row.names = FALSE
+)
+
+write.csv(
+  deg,
+  file.path(output_dir, paste0(comparison, "_DEGs.csv")),
+  row.names = FALSE
+)
+
+# Review results
+summary(res)
+table(deg$direction)
+head(deg)
+
