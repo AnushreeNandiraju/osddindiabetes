@@ -1,1 +1,197 @@
+library(limma)
 
+matrix_path <- "C:/Users/famna/Downloads/GSE185011_AllSample_matrix_FPKM.txt/GSE185011_AllSample_matrix_FPKM.txt"
+out_dir <- dirname(matrix_path)
+
+
+mat <- read.delim(matrix_path, check.names = FALSE)
+
+colnames(mat) <- sub("^GSM\\d+_", "", colnames(mat))
+
+
+expr <- as.matrix(mat[, -1, drop = FALSE])
+rownames(expr) <- mat$Gene
+agg   <- aggregate(expr, by = list(gene = rownames(expr)), FUN = mean)
+expr  <- as.matrix(agg[, -1, drop = FALSE])
+rownames(expr) <- agg$gene
+
+dim(expr)          # ~39897 x 25
+
+
+group <- factor(sub("\\d+$", "", colnames(expr)),
+                levels = c("HC", "T2DM", "DR", "DPN", "DN"))
+meta  <- data.frame(sample = colnames(expr), group = group)
+stopifnot(identical(colnames(expr), meta$sample))   # now TRUE
+
+log2mat <- log2(expr + 1)
+cat(sprintf("Genes tested: %d\n", nrow(log2mat)))   # ~39897
+
+design <- model.matrix(~ 0 + group, data = meta)
+colnames(design) <- levels(meta$group)
+
+fit <- lmFit(log2mat, design)
+
+
+cont  <- makeContrasts(DPN_vs_T2DM = DPN - T2DM, levels = design)
+fit2  <- eBayes(contrasts.fit(fit, cont), trend = TRUE)
+
+de <- topTable(fit2, number = Inf)
+de$gene_id <- rownames(de)
+
+
+head(de[, c("gene_id", "logFC", "P.Value", "adj.P.Val")], 10)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+library(ggplot2)
+
+genes <- c("HLA-DRB5", "TNFRSF6B", "EDA", "CXCL8", "IGKV5-2", "IGHV3-33",
+           "IGHV3-13", "CXCL1", "DEFA1", "IGHV1-69", "IGKV1-16", "HLA-DPB1",
+           "CCL3", "HLA-DRA", "CTSG", "CEACAM8", "ICOS", "HLA-DQA1",
+           "IGKV3-20", "HLA-DRB1", "HLA-DQB1")
+groups <- c("T2DM", "DR", "DPN")
+pal <- c(T2DM = "#0279EE", DR = "#FF9400", DPN = "#75A025")
+
+tar_dir <- "C:/Users/famna/Downloads/GSE185011_RAW"
+files <- list.files(tar_dir, pattern = "_FPKM\\.txt\\.gz$", full.names = TRUE)
+
+mat <- Reduce(function(x, y) merge(x, y, by = "gene_id", all = TRUE),
+              lapply(files, function(f) {
+                gsm <- sub("_FPKM\\.txt\\.gz$", "", basename(f))
+                df <- read.delim(f, stringsAsFactors = FALSE)
+                df <- aggregate(FPKM ~ gene_id, data = df, FUN = max)
+                names(df)[2] <- gsm
+                df
+              }))
+rownames(mat) <- mat$gene_id
+mat$gene_id <- NULL
+
+grp_of <- function(gsm) {
+  g <- sub("\\d+$", "", sub("^GSM\\d+_", "", gsm))
+  ifelse(g %in% groups, g, "HC")
+}
+sample_groups <- vapply(colnames(mat), grp_of, character(1))
+
+# --- Long format: raw FPKM, disease groups only ---
+long <- do.call(rbind, lapply(genes, function(g) {
+  if (!g %in% rownames(mat)) { message("Missing: ", g); return(NULL) }
+  keep <- sample_groups %in% groups
+  data.frame(gene = g,
+             group = factor(sample_groups[keep], levels = groups),
+             FPKM = as.numeric(mat[g, keep]))
+}))
+
+p <- ggplot(long, aes(group, FPKM, fill = group)) +
+  geom_boxplot(width = 0.6, linewidth = 0.35, outlier.shape = NA,
+               colour = "grey25") +
+  geom_jitter(width = 0.12, size = 1.1, colour = "grey20", alpha = 0.8) +
+  facet_wrap(~gene, ncol = 3, scales = "free_y") +
+  scale_fill_manual(values = pal) +
+  labs(title = "GSE185011 PBMC expression by group",
+       x = "Group", y = "FPKM", fill = NULL) +
+  theme_bw(base_size = 10) +
+  theme(strip.text = element_text(face = "bold"),
+        legend.position = "top",
+        panel.grid.minor = element_blank())
+
+ggsave("gene_boxplots_gse185011_R.png", p, width = 11, height = 18, dpi = 200)
+ggsave("gene_boxplots_gse185011_R.svg", p, width = 11, height = 18)
+write.csv(long, "gene_boxplot_values_gse185011_R.csv", row.names = FALSE)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+library(ggplot2)
+
+genes <- c("HLA-DRB5", "TNFRSF6B", "EDA", "CXCL8", "IGKV5-2", "IGHV3-33",
+           "IGHV3-13", "CXCL1", "DEFA1", "IGHV1-69", "IGKV1-16", "HLA-DPB1",
+           "CCL3", "HLA-DRA", "CTSG", "CEACAM8", "ICOS", "HLA-DQA1",
+           "IGKV3-20", "HLA-DRB1", "HLA-DQB1")
+groups <- c("T2DM", "DR", "DPN")
+pal <- c(T2DM = "#0279EE", DR = "#FF9400", DPN = "#75A025")
+
+tar_dir <- "C:/Users/famna/Downloads/GSE185011_RAW"
+files <- list.files(tar_dir, pattern = "_FPKM\\.txt\\.gz$", full.names = TRUE)
+
+mat <- Reduce(function(x, y) merge(x, y, by = "gene_id", all = TRUE),
+              lapply(files, function(f) {
+                gsm <- sub("_FPKM\\.txt\\.gz$", "", basename(f))
+                df <- read.delim(f, stringsAsFactors = FALSE)
+                df <- aggregate(FPKM ~ gene_id, data = df, FUN = max)
+                names(df)[2] <- gsm
+                df
+              }))
+rownames(mat) <- mat$gene_id
+mat$gene_id <- NULL
+
+grp_of <- function(gsm) {
+  g <- sub("\\d+$", "", sub("^GSM\\d+_", "", gsm))
+  ifelse(g %in% groups, g, "HC")
+}
+sample_groups <- vapply(colnames(mat), grp_of, character(1))
+
+# --- Long format: raw FPKM, disease groups only ---
+long <- do.call(rbind, lapply(genes, function(g) {
+  if (!g %in% rownames(mat)) { message("Missing: ", g); return(NULL) }
+  keep <- sample_groups %in% groups
+  data.frame(gene = g,
+             group = factor(sample_groups[keep], levels = groups),
+             FPKM = as.numeric(mat[g, keep]))
+}))
+
+p <- ggplot(long, aes(group, FPKM, fill = group)) +
+  geom_boxplot(width = 0.6, linewidth = 0.35, outlier.shape = NA,
+               colour = "grey25") +
+  geom_jitter(width = 0.12, size = 1.1, colour = "grey20", alpha = 0.8) +
+  facet_wrap(~gene, ncol = 3) +                  # add scales = "free_y" for per-panel axes
+  scale_fill_manual(values = pal) +
+  labs(title = "GSE185011 PBMC expression by group",
+       x = "Group", y = "FPKM", fill = NULL) +
+  theme_bw(base_size = 10) +
+  theme(strip.text = element_text(face = "bold"),
+        legend.position = "top",
+        panel.grid.minor = element_blank())
+
+ggsave("gene_boxplots_gse185011_R.png", p, width = 11, height = 18, dpi = 200)
+ggsave("gene_boxplots_gse185011_R.svg", p, width = 11, height = 18)
+write.csv(long, "gene_boxplot_values_gse185011_R.csv", row.names = FALSE)
